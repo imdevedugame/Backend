@@ -1,177 +1,266 @@
 import { supabase } from "../supabaseClient.js";
 import multer from 'multer';
-const upload = multer();
+
+// Konfigurasi multer: 
+// - Batas ukuran file per gambar: 800KB
+// - Maksimal 5 file, dengan field name "images"
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 800 * 1024 }, // 800KB per file
+});
+
+// Fungsi untuk upload satu file dan mendapatkan URL publik
+const uploadImage = async (file) => {
+  const { buffer, originalname } = file;
+  const { data, error: uploadError } = await supabase.storage
+    .from('images')
+    .upload(`config/${Date.now()}_${originalname}`, buffer);
+
+  if (uploadError) throw uploadError;
+
+  const { publicURL, error: urlError } = supabase.storage
+    .from('images')
+    .getPublicUrl(data.path);
+
+  if (urlError || !publicURL) {
+    const supabaseUrl = 'https://qckcobphtiuerzftgnot.supabase.co';
+    return `${supabaseUrl}/storage/v1/object/public/images/${data.path}`;
+  } else {
+    return publicURL;
+  }
+};
 
 class ConfigController {
-    async getAllConfigs(req, res) {
-        try {
-            const { data, error } = await supabase
-                .from('config')
-                .select('*');
+  // Mendapatkan semua config
+  async getAllConfigs(req, res) {
+    try {
+      const { data, error } = await supabase
+        .from('config')
+        .select('*');
 
-            if (error) throw error;
+      if (error) throw error;
 
-            res.status(200).json({ success: true, data });
-        } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
-        }
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
     }
+  }
 
-    async getConfigById(req, res) {
-        const { id } = req.params;
+  // Mendapatkan config berdasarkan ID
+  async getConfigById(req, res) {
+    const { id } = req.params;
+    try {
+      const { data, error } = await supabase
+        .from('config')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-        try {
-            const { data, error } = await supabase
-                .from('config')
-                .select('*')
-                .eq('id', id)
-                .single();
+      if (error) throw error;
 
-            if (error) throw error;
-
-            res.status(200).json({ success: true, data });
-        } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
-        }
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
     }
+  }
 
-    async createConfig(req, res) {
-        const { judul, description, like, github } = req.body;
-        const image = req.file;
+  // Membuat config baru dengan dukungan upload maksimal 5 gambar
+  async createConfig(req, res) {
+    // Gunakan multer untuk meng-handle array file dengan field "images"
+    upload.array('images', 5)(req, res, async (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
 
-        // Validasi kolom wajib
-        if (!judul || !description) {
+      // Ambil data dari req.body
+      const {
+        judul,
+        description,
+        like,
+        github,
+        desktop_environment,
+        windows_manager,
+        distro,
+        terminal,
+        shell,
+        author
+      } = req.body;
+
+      // Validasi kolom wajib
+      if (!judul || !description || !author) {
+        return res.status(400).json({
+          success: false,
+          message: 'Kolom judul, deskripsi, dan author wajib diisi.'
+        });
+      }
+
+      try {
+        // Upload gambar jika ada
+        let imageUrls = [];
+        if (req.files && req.files.length > 0) {
+          if (req.files.length > 5) {
             return res.status(400).json({
-                success: false,
-                message: 'Kolom judul dan description wajib diisi.'
+              success: false,
+              message: 'Maksimal 5 gambar diperbolehkan.'
             });
+          }
+          // Upload tiap file
+          for (const file of req.files) {
+            const url = await uploadImage(file);
+            imageUrls.push(url);
+          }
         }
 
-        // Validasi link GitHub (opsional)
-        if (github && !/^https?:\/\/(www\.)?github\.com\/[\w-]+\/[\w-]+$/.test(github)) {
+        // Ambil user_id dari req.user (pastikan endpoint ini dilindungi middleware userAuth)
+        const user_id = req.user.id;
+        const likeValue = like || 0;
+
+        // Insert config baru
+        const { data, error } = await supabase
+          .from('config')
+          .insert([{
+            judul,
+            description,
+            image_url: imageUrls,
+            like: likeValue,
+            github,
+            desktop_environment,
+            windows_manager,
+            distro,
+            terminal,
+            shell,
+            author,
+            user_id,
+            created_at: new Date(),
+          }], { returning: 'representation' })
+          .single();
+
+        if (error) throw error;
+
+        res.status(201).json({ success: true, data });
+      } catch (error) {
+        console.error('Error:', error.message);
+        res.status(500).json({ success: false, message: error.message });
+      }
+    });
+  }
+
+  // Mengupdate config (hanya oleh user yang membuat config)
+  async updateConfig(req, res) {
+    const { id } = req.params;
+    const {
+      judul,
+      description,
+      like,
+      github,
+      desktop_environment,
+      windows_manager,
+      distro,
+      terminal,
+      shell,
+      author
+    } = req.body;
+
+    try {
+      // Cek dulu apakah config ini dimiliki oleh user yang sedang login
+      const { data: existingConfig, error: fetchError } = await supabase
+        .from('config')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (fetchError) throw fetchError;
+      if (!existingConfig) {
+        return res.status(404).json({ success: false, message: 'Config tidak ditemukan.' });
+      }
+      if (existingConfig.user_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Anda tidak memiliki izin untuk mengedit config ini.' });
+      }
+
+      // Gunakan multer untuk file gambar (opsional update gambar)
+      upload.array('images', 5)(req, res, async (err) => {
+        if (err) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+        let imageUrls = existingConfig.image_url || [];
+        if (req.files && req.files.length > 0) {
+          if (req.files.length > 5) {
             return res.status(400).json({
-                success: false,
-                message: 'Link GitHub tidak valid.'
+              success: false,
+              message: 'Maksimal 5 gambar diperbolehkan.'
             });
+          }
+          // Upload tiap file dan ganti imageUrls
+          imageUrls = [];
+          for (const file of req.files) {
+            const url = await uploadImage(file);
+            imageUrls.push(url);
+          }
         }
 
-        try {
-            let imageUrl = null;
+        const updateData = {
+          judul,
+          description,
+          like,
+          github,
+          desktop_environment,
+          windows_manager,
+          distro,
+          terminal,
+          shell,
+          author,
+          image_url: imageUrls
+        };
 
-            if (image) {
-                const { data, error: uploadError } = await supabase.storage
-                    .from('images')
-                    .upload(`config/${Date.now()}_${image.originalname}`, image.buffer);
+        const { data, error } = await supabase
+          .from('config')
+          .update(updateData)
+          .eq('id', id)
+          .single();
 
-                console.log('Upload result:', data, uploadError);
+        if (error) throw error;
 
-                if (uploadError) throw uploadError;
-
-                console.log('File Path:', data.path);
-
-                const { publicURL, error: urlError } = supabase.storage
-                    .from('images')
-                    .getPublicUrl(data.path);
-
-                if (urlError || !publicURL) {
-                    const supabaseUrl = 'https://qckcobphtiuerzftgnot.supabase.co';
-                    imageUrl = `${supabaseUrl}/storage/v1/object/public/images/${data.path}`;
-                } else {
-                    imageUrl = publicURL;
-                }
-
-                console.log('Final Public URL:', imageUrl);
-            }
-
-            const likeValue = like || 0;
-
-            const { data, error } = await supabase
-                .from('config')
-                .insert([{ judul, description, image_url: imageUrl, like: likeValue, github }])
-                .single();
-
-            if (error) throw error;
-
-            res.status(201).json({ success: true, data });
-        } catch (error) {
-            console.error('Error:', error.message);
-            res.status(500).json({ success: false, message: error.message });
-        }
+        res.status(200).json({ success: true, data });
+      });
+    } catch (error) {
+      console.error('Error:', error.message);
+      res.status(500).json({ success: false, message: error.message });
     }
+  }
 
-    async updateConfig(req, res) {
-        const { id } = req.params;
-        const { judul, description, like, github } = req.body;
-        const image = req.file;
+  // Menghapus config (hanya oleh user yang membuat config)
+  async deleteConfig(req, res) {
+    const { id } = req.params;
 
-        try {
-            let imageUrl = null;
+    try {
+      // Cek dulu kepemilikan config
+      const { data: existingConfig, error: fetchError } = await supabase
+        .from('config')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-            if (image) {
-                const { data, error: uploadError } = await supabase.storage
-                    .from('images')
-                    .upload(`config/${Date.now()}_${image.originalname}`, image.buffer);
+      if (fetchError) throw fetchError;
+      if (!existingConfig) {
+        return res.status(404).json({ success: false, message: 'Config tidak ditemukan.' });
+      }
+      if (existingConfig.user_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Anda tidak memiliki izin untuk menghapus config ini.' });
+      }
 
-                console.log('Upload result:', data, uploadError);
+      const { data, error } = await supabase
+        .from('config')
+        .delete()
+        .eq('id', id);
 
-                if (uploadError) throw uploadError;
+      if (error) throw error;
 
-                const { publicURL, error: urlError } = supabase.storage
-                    .from('images')
-                    .getPublicUrl(data.path);
-
-                if (urlError || !publicURL) {
-                    const supabaseUrl = 'https://qckcobphtiuerzftgnot.supabase.co';
-                    imageUrl = `${supabaseUrl}/storage/v1/object/public/images/${data.path}`;
-                } else {
-                    imageUrl = publicURL;
-                }
-
-                console.log('Final Public URL:', imageUrl);
-            }
-
-            const updateData = {
-                judul,
-                description,
-                like,
-                github,
-            };
-
-            if (imageUrl) {
-                updateData.image_url = imageUrl;
-            }
-
-            const { data, error } = await supabase
-                .from('config')
-                .update(updateData)
-                .eq('id', id)
-                .single();
-
-            if (error) throw error;
-
-            res.status(200).json({ success: true, data });
-        } catch (error) {
-            console.error('Error:', error.message);
-            res.status(500).json({ success: false, message: error.message });
-        }
+      res.status(200).json({ success: true, message: 'Config berhasil dihapus.', data });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
     }
-
-    async deleteConfig(req, res) {
-        const { id } = req.params;
-
-        try {
-            const { data, error } = await supabase
-                .from('config')
-                .delete()
-                .eq('id', id);
-
-            if (error) throw error;
-
-            res.status(200).json({ success: true, message: 'Config deleted successfully', data });
-        } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
-        }
-    }
+  }
 }
 
 export default new ConfigController();

@@ -1,16 +1,22 @@
 import express from 'express';
 import ConfigController from '../controllers/configController.js';
-import multer from 'multer';
+import { userAuthMiddleware } from '../middleware/userAuthMiddleware.js';
+
 const router = express.Router();
-const upload = multer();
 
-
-
-
+// Endpoint untuk mengambil semua config (publik)
 router.get('/configs', ConfigController.getAllConfigs);
+
+// Endpoint untuk mengambil config berdasarkan ID (publik)
 router.get('/configs/:id', ConfigController.getConfigById);
-router.post('/configs', upload.single('image'), ConfigController.createConfig);
-router.put('/configs/:id', upload.single('image'), ConfigController.updateConfig);
-router.delete('/configs/:id', ConfigController.deleteConfig);
+
+// Endpoint untuk membuat config baru (dilindungi userAuth)
+router.post('/configs', userAuthMiddleware, ConfigController.createConfig);
+
+// Endpoint untuk mengupdate config (hanya pemilik yang bisa)
+router.put('/configs/:id', userAuthMiddleware, ConfigController.updateConfig);
+
+// Endpoint untuk menghapus config (hanya pemilik yang bisa)
+router.delete('/configs/:id', userAuthMiddleware, ConfigController.deleteConfig);
 
 export default router;

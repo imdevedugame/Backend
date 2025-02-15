@@ -4,7 +4,9 @@ import komentarRoutes from './routes/komentarRoutes.js';
 import usersRoutes from './routes/usersRoutes.js';
 import adminRoutes from './routes/adminRouter.js'; 
 import authRoutes from './routes/authRoutes.js';
-
+import likeRoutes from './routes/likeRoutes.js'; // Import route untuk like
+import userauthRoutes from './routes/userauthRoutes.js'; // Import route untuk userauth
+import bookmarkRoutes from './routes/bookmarkRoutes.js';
 import cors from 'cors';
 
 const app = express();
@@ -22,9 +24,11 @@ app.use(cors(corsOptions));
 app.use('/api', configRoutes);
 app.use('/api', komentarRoutes);
 app.use('/api', usersRoutes);
-app.use('/api', adminRoutes); // Tambahkan ini
+app.use('/api', adminRoutes);
 app.use('/api/auth', authRoutes);
-
+app.use('/api', likeRoutes); // Tambahkan route like di sini
+app.use('/api', userauthRoutes); // Tambahkan route userauth di sini
+app.use('/api', bookmarkRoutes);
 const port = 5000;
 app.listen(port, () => {
     console.log(`Server ${port} dapat rokok 2 batang`);
