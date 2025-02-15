@@ -96,7 +96,7 @@ class ConfigController {
       }
 
       try {
-        // Upload gambar jika ada
+        // Upload gambar jika ada (dijalankan secara paralel)
         let imageUrls = [];
         if (req.files && req.files.length > 0) {
           if (req.files.length > 5) {
@@ -105,11 +105,7 @@ class ConfigController {
               message: 'Maksimal 5 gambar diperbolehkan.'
             });
           }
-          // Upload tiap file
-          for (const file of req.files) {
-            const url = await uploadImage(file);
-            imageUrls.push(url);
-          }
+          imageUrls = await Promise.all(req.files.map(file => uploadImage(file)));
         }
 
         // Ambil user_id dari req.user (pastikan endpoint ini dilindungi middleware userAuth)
@@ -191,12 +187,8 @@ class ConfigController {
               message: 'Maksimal 5 gambar diperbolehkan.'
             });
           }
-          // Upload tiap file dan ganti imageUrls
-          imageUrls = [];
-          for (const file of req.files) {
-            const url = await uploadImage(file);
-            imageUrls.push(url);
-          }
+          // Upload tiap file secara paralel dan ganti imageUrls
+          imageUrls = await Promise.all(req.files.map(file => uploadImage(file)));
         }
 
         const updateData = {
